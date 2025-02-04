@@ -1,0 +1,8 @@
+bind_host: 0.0.0.0
+bind_port: 4600
+llama_port_range: [ 4801, 4900 ]
+llama_bin: /home/snajpa/tmp/llama.cpp/build-rpc-cuda/bin/llama-server
+model_dir: /home/snajpa/models
+log_lines: 1000
+blacklist: [ Intel ]
+update_in: 2
