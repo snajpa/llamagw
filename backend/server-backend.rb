@@ -312,9 +312,9 @@ class LlamaInstance
       
               # Print output in real-time
               if io == stdout
-                #puts line
+                puts line
               else
-                #warn line
+                warn line
               end
             rescue EOFError
               ios.delete(io) # Remove closed stream

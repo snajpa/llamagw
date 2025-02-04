@@ -30,7 +30,7 @@ unless config_file
 end
 
 $config = YAML.load_file(config_file)
-$config[:update_interval] ||= 60
+$config["update_interval"] ||= 60
 
 def load_config_into_db(config_file)
   ActiveRecord::Base.transaction do
@@ -51,8 +51,8 @@ def load_config_into_db(config_file)
         backend.url  = backend_conf['url']
         backend.save!
         begin
-          backend.sync_complete_state
           backend.post_model_list(Model.all)
+          backend.sync_complete_state
         rescue => e
           puts "Error syncing backend: #{e.message}"
         end
@@ -64,10 +64,10 @@ end
 def model_ready_on_all_backends?(model_name)
   return false unless Model.find_by(name: model_name)
   Backend.all.each do |backend|
-    return false unless
-      backend.models_from_backend.include?(model_name) &&
-      backend.models_from_backend[model_name]['ready'] &&
-      backend.available
+    models = backend.models_from_backend
+    model = models.find { |m| m['name'] == model_name }
+    return false unless model
+    return false unless model['ready']
   end
   true
 end
@@ -84,6 +84,13 @@ def acquire_slot(model_name)
   puts "Acquiring instance for model #{model_name} on backend #{backend.name}"
   
   LlamaInstance.where(model: model, backend: backend, cached_active: true).each do |instance|
+    3.times do
+      if instance.query_active?
+        break
+      end
+      sleep 1
+    end
+    next unless instance.cached_active
     if slot = instance.occupy_slot
       return {instance: instance, slot: slot}
     end
@@ -101,7 +108,8 @@ def acquire_slot(model_name)
     puts "Failed to create new instance for model #{model_name} on backend #{backend.name}"
     return nil
   end
-  
+
+  new_inst.save
   new_inst.launch
 
   if new_inst.cached_active
@@ -161,14 +169,22 @@ load_config_into_db(config_file)
 
 Thread.new do
   loop do
+    puts "Updating backends"
     Backend.all.each do |backend|
       previous_status = backend.available
       backend.update_status
-      if !previous_status && backend.available && backend.updated_at > $config[:update_interval].second.ago
+      if !previous_status && backend.available && (Time.now.to_i - backend.updated_at.to_i) > $config["update_interval"]
         backend.post_model_list(Model.all)
       end
+      if previous_status && !backend.available
+        backend.llama_instances.each do |instance|
+          LlamaInstanceSlot.where(llama_instance: instance).destroy_all
+          instance.destroy
+        end
+      end
     end
-    sleep $config[:update_interval]
+    puts "Updating done"
+    sleep $config["update_interval"]
   end
 end
 

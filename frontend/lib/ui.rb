@@ -49,29 +49,36 @@ get '/' do
     <table>
       <tr>
         <th>Backend</th>
-        <th>Gpu ID</th>
+        <th>Gpu idx</th>
         <th>Vendor</th>
         <th>VRAM Total</th>
+        <th>VRAM Free</th>
         <th>VRAM Used</th>
         <th>Power Usage</th>
+        <th>Compute Usage</th>
+        <th>MemBW Usage</th>
+        <th>Temperature</th>
         <th>Status</th>
       </tr>
   BLOCK
 
-  Backend.all.each do |backend|
-    backend.gpus.each do |id, gpu|
-      gpus_html += <<~GBLK
-        <tr>
-          <td>#{backend.name}</td>
-          <td>#{id}</td>
-          <td>#{gpu['vendor']}</td>
-          <td>#{gpu.dig('status','vram_total')} MB</td>
-          <td>#{gpu.dig('status','vram_used')} MB</td>
-          <td>#{gpu.dig('status','power_usage')}W</td>
-          <td>#{backend.available ? 'Available' : 'Unavailable'}</td>
-        </tr>
-      GBLK
-    end
+  Gpu.all.each do |gpu|
+    backend = gpu.reload_backend
+    gpus_html += <<~GBLK
+      <tr>
+        <td>#{backend.name}</td>
+        <td>#{gpu.index}</td>
+        <td>#{gpu.vendor}</td>
+        <td>#{gpu.memory_total} MB</td>
+        <td>#{gpu.memory_free} MB</td>
+        <td>#{gpu.memory_used} MB</td>
+        <td>#{gpu.power_usage}W</td>
+        <td>#{gpu.compute_usage}%</td>
+        <td>#{gpu.membw_usage}%</td>
+        <td>#{gpu.temperature}C</td>
+        <td>#{backend.available ? 'Available' : 'Unavailable'}</td>
+      </tr>
+    GBLK
   end
   gpus_html += "</table>"
 
@@ -80,6 +87,7 @@ get '/' do
     <table>
       <tr>
         <th>Name</th>
+        <th>Slots per instance</th>
         <th>Context Size</th>
         <th>Files</th>
         <th>Status</th>
@@ -91,10 +99,11 @@ get '/' do
     files = conf['files'] || []
     models_html += <<~MBLK
       <tr>
-        <td>#{conf['name']}</td>
+        <td>#{model.name}</td>
+        <td>#{conf['slots']}</td>
         <td>#{conf['ctx']}</td>
         <td>#{files.join(', ')}</td>
-        <td>#{model_ready_on_all_backends?(model.name) ? 'Ready' : 'Downloading'}</td>
+        <td>#{model_ready_on_all_backends?(model.name) ? 'Ready' : 'Unavailable'}</td>
       </tr>
     MBLK
   end
@@ -107,19 +116,24 @@ get '/' do
         <th>Backend</th>
         <th>Model</th>
         <th>Slots In Use</th>
+        <th>Slots Free</th>
         <th>Capacity</th>
         <th>Port</th>
+        <th>Active</th>
       </tr>
   BLOCK
 
-  LlamaInstance.where(active: true).each do |instance|
+  LlamaInstance.where(cached_active: true).each do |instance|
+    used = instance.slots_capacity - instance.slots_free
     instances_html += <<~IBLK
       <tr>
         <td>#{instance.backend&.name}</td>
         <td>#{instance.model&.name}</td>
-        <td>#{instance.slots_in_use}</td>
+        <td>#{used}</td>
+        <td>#{instance.slots_free}</td>
         <td>#{instance.slots_capacity}</td>
         <td>#{instance.port}</td>
+        <td>#{instance.cached_active? ? 'Yes' : '-'}</td>
       </tr>
     IBLK
   end
@@ -134,7 +148,8 @@ get '/' do
         #{models_html}
         #{instances_html}
         <script>
-          setTimeout(function() { window.location.reload(); }, 5000);
+          setTimeout(function() { window.location.reload(); },
+                     #{$config["update_interval"] * 1000});
         </script>
       </body>
     </html>

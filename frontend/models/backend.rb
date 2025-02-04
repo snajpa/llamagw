@@ -11,7 +11,6 @@ class Backend < ActiveRecord::Base
   end
 
   def get(path, params = {})
-    puts self.url
     uri = URI.parse("#{self.url}/#{path}")
     uri.query = URI.encode_www_form(params)
     response = Net::HTTP.get_response(uri)
@@ -116,22 +115,26 @@ class Backend < ActiveRecord::Base
       
       # Sync running instances
       response = get('instances')
+      30.times do
+        puts "Syncing instances: #{response.inspect}"
+      end
+      puts "Syncing instances: #{response.inspect}"
       if response
         current_instance_ids = []
         
         response.each do |inst_data|
-          next unless model = Model.find_by(name: inst_data['model'])
-          
+          model = Model.find_by(name: inst_data['model'])          
           instance = llama_instances.find_or_create_by!(
-            name: inst_data['name']
+            name: inst_data['name'],
+            model: model,
+            backend: self
           )
           
           instance.update!(
-            model: model,
             port: inst_data['port'],
             slots_capacity: inst_data['slots_capacity'],
-            slots_free: inst_data['slots_capacity'] - inst_data['slots_in_use'],
-            cached_active: inst_data['active']
+            slots_free: inst_data['slots_capacity'],
+            cached_active: true
           )
           
           current_instance_ids << instance.id
@@ -140,12 +143,14 @@ class Backend < ActiveRecord::Base
           current_slot_ids = []
           inst_data['slots_capacity'].times do |i|
             slot = instance.llama_instance_slots.find_or_create_by!(
+              llama_instance: instance,
+              model: model,
               slot_number: i
             )
             
             slot.update!(
               model: model,
-              occupied: i < inst_data['slots_in_use']
+              occupied: false,
             )
             
             current_slot_ids << slot.id
