@@ -110,7 +110,7 @@ get '/' do
   models_html += "</table>"
 
   instances_html = <<~BLOCK
-    <h2>Active Instances</h2>
+    <h2>Instances</h2>
     <table>
       <tr>
         <th>Backend</th>
@@ -119,11 +119,13 @@ get '/' do
         <th>Slots Free</th>
         <th>Capacity</th>
         <th>Port</th>
+        <th>Running</th>
+        <th>Loaded</th>
         <th>Active</th>
       </tr>
   BLOCK
 
-  LlamaInstance.where(cached_active: true).each do |instance|
+  LlamaInstance.all.each do |instance|
     used = instance.slots_capacity - instance.slots_free
     instances_html += <<~IBLK
       <tr>
@@ -133,7 +135,9 @@ get '/' do
         <td>#{instance.slots_free}</td>
         <td>#{instance.slots_capacity}</td>
         <td>#{instance.port}</td>
-        <td>#{instance.cached_active? ? 'Yes' : '-'}</td>
+        <td>#{instance.running ? 'Yes' : '-'}</td>
+        <td>#{instance.loaded ? 'Yes' : '-'}</td>
+        <td>#{instance.active ? 'Yes' : '-'}</td>
       </tr>
     IBLK
   end

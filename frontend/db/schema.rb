@@ -12,6 +12,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
     t.string     "url"
     t.text       "models_json"
     t.boolean    "available", default: false
+    t.datetime   "last_seen_at"
     t.timestamps
   end
 
@@ -38,7 +39,9 @@ ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
     t.integer    "slots_capacity"
     t.integer    "slots_free"
     t.integer    "port"
-    t.boolean    "cached_active", default: false
+    t.boolean    "running", default: false
+    t.boolean    "loaded", default: false
+    t.boolean    "active", default: false
     t.timestamps
   end
 
@@ -49,5 +52,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
     t.string     "last_token", default: ""
     t.boolean    "occupied", default: false
     t.timestamps
-  end  
+  end
+
+  add_index "llama_instances", ["backend_id", "name"], name: "index_llama_instances_on_backend_id_and_name", unique: true
 end

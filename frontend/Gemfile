@@ -17,3 +17,5 @@ gem "rake", "~> 13.2"
 gem "activerecord", "~> 7.2"
 
 gem "sinatra-reloader", "~> 1.0"
+
+gem "rainbow", "~> 3.1"

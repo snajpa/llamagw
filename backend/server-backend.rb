@@ -86,13 +86,13 @@ class Model
       slots: @slots,
       ctx: @ctx,
       files: @files,
-      ready: active?,
+      ready: ready?,
       url: @url,
       extra_args: @extra_args
     }.to_json(*args)
   end
 
-  def active?
+  def ready?
     !@downloading #&&
      # @files.all? { |file| File.exist?(File.join(MODEL_DIR, file)) &&
      #                      File.size?(File.join(MODEL_DIR, file)) }
@@ -246,7 +246,7 @@ class Gpu
 end
 
 class LlamaInstance
-  attr_reader :name, :command, :gpus, :bind, :port, :process, :stdout, :active
+  attr_reader :name, :command, :gpus, :bind, :port, :process, :stdout, :loaded, :running
   attr_accessor :slots_in_use, :slots_capacity, :model
 
   def initialize(name, model, bind, port, gpus)
@@ -258,7 +258,8 @@ class LlamaInstance
     @stdout = []
     @command = ""
     @process = nil
-    @active = false
+    @running = false
+    @loaded = false
     @slots_capacity = model.slots
     @slots_in_use = 0
   end
@@ -270,14 +271,16 @@ class LlamaInstance
       slots_in_use: @slots_in_use,
       slots_capacity: @slots_capacity,
       port: @port,
-      active: @active,
+      bind: @bind,
+      running: @process ? true : false,
+      loaded: @loaded,
       command: @command,
       gpus: @gpus.map(&:device)
     }.to_json(*args)
   end
 
   def start
-    return "Instance alactive running" if @process
+    return "Instance already running" if @running
 
     @command = "#{LLAMA_BIN} -m #{@model.path} -ngl 99 --host #{bind} --port #{port} #{@model.extra_args.join(' ')}"
 
@@ -291,6 +294,7 @@ class LlamaInstance
     @thread = Thread.new do
       Open3.popen3(env, @command) do |stdin, stdout, stderr, wait_thr|
         @process = wait_thr
+        @running = true
         ios = [stdout, stderr]
 
         until ios.empty?
@@ -304,7 +308,7 @@ class LlamaInstance
                 next
               end
               if line =~ /main: server is listening on/
-                @active = true
+                @loaded = true
               end
               # Maintain only the last 100 lines
               @stdout << line.chomp
@@ -324,14 +328,15 @@ class LlamaInstance
       end
     end
     puts "Thread started"
-    { name: @name, bind: @bind, port: @port, command: @command, active: @active }
+    to_json
   end
 
   def stop
     return "No instance running" unless @process
     Process.kill("TERM", @process.pid)
     @process = nil
-    @active = false
+    @running = false
+    @loaded = false
     "Llama.cpp instance '#{@name}' stopped"
   end
 end
@@ -369,7 +374,7 @@ end
 post '/instances' do
   request_data = JSON.parse(request.body.read, symbolize_names: true)
   model = $models[request_data[:model]]
-  halt 404, { error: "Model not found" }.to_json if model.nil?
+  halt 404, { error: "Model not found. #{request_data.inspect}" }.to_json if model.nil?
 
   instance_name = request_data[:name]
   gpus = request_data[:gpus] || []

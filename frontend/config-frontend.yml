@@ -15,4 +15,4 @@ models:
 backends:
 - name: snpdesktop
   url: http://localhost:4600
-update_interval: 1
+update_interval: 5

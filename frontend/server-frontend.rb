@@ -9,12 +9,17 @@ require 'thread'
 require 'optparse'
 require 'sinatra/activerecord'  
 require 'sinatra/base'
+
+require 'rainbow/refinement'
+using Rainbow
+
 #require 'sinatra/reloader' if true
 
 require_relative 'models/model'
 require_relative 'models/backend'
 require_relative 'models/gpu'
-require_relative 'models/llama_instance'  
+require_relative 'models/llama_instance'
+require_relative 'models/llama_instance_slot'
 
 config_file = './config-frontend.yml'
 OptionParser.new do |opts|
@@ -33,29 +38,27 @@ $config = YAML.load_file(config_file)
 $config["update_interval"] ||= 60
 
 def load_config_into_db(config_file)
-  ActiveRecord::Base.transaction do
-    # Update models while preserving existing records
-    if $config['models']
-      $config['models'].each do |model_conf|
-        model = Model.find_or_initialize_by(name: model_conf['name'])
-        model.config = model_conf
-        model.save!
-      end
+  # Update models while preserving existing records
+  if $config['models']
+    $config['models'].each do |model_conf|
+      model = Model.find_or_initialize_by(name: model_conf['name'])
+      model.config = model_conf
+      model.save!
     end
+  end
 
-    # Update backends while preserving state
-    if $config['backends']
-      $config['backends'].each do |backend_conf|
-        backend = Backend.find_or_initialize_by(name: backend_conf['name'])
-        backend.name = backend_conf['name']
-        backend.url  = backend_conf['url']
-        backend.save!
-        begin
-          backend.post_model_list(Model.all)
-          backend.sync_complete_state
-        rescue => e
-          puts "Error syncing backend: #{e.message}"
-        end
+  # Update backends while preserving state
+  if $config['backends']
+    $config['backends'].each do |backend_conf|
+      backend = Backend.find_or_initialize_by(name: backend_conf['name'])
+      backend.name = backend_conf['name']
+      backend.url  = backend_conf['url']
+      backend.save!
+      begin
+        backend.post_model_list(Model.all)
+        backend.sync_complete_state
+      rescue => e
+        puts "Error syncing backend: #{e.message}"
       end
     end
   end
@@ -77,27 +80,35 @@ def acquire_slot(model_name)
   model = Model.find_by(name: model_name)
   return nil unless model
 
-  puts "Looking for available backend for model #{model_name}"
+  puts "Looking for available backend for model #{model_name}".bright.magenta
   backend = Backend.where(available: true).first
-  return nil unless backend
+  if backend.nil?
+    puts "No available backends found for model #{model_name}".bright.red
+    return nil
+  end
 
-  puts "Acquiring instance for model #{model_name} on backend #{backend.name}"
+  puts "Acquiring instance for model #{model_name} on backend #{backend.name}".bright.magenta
   
-  LlamaInstance.where(model: model, backend: backend, cached_active: true).each do |instance|
-    3.times do
-      if instance.query_active?
-        break
-      end
-      sleep 1
+  LlamaInstance.joins(:backend).
+                where(model: model,
+                      backend: { id: backend.id, available: true }).each do |instance|
+    puts "Instance for model #{model_name} on backend #{backend.name} is evaluated".bright.green
+    instance.ensure_loaded(5)
+    unless instance.ready?
+      puts "Instance for model #{model_name} on backend #{backend.name} is not ready, next".bright.red
+      next
     end
-    next unless instance.cached_active
-    if slot = instance.occupy_slot
+
+    slot = instance.occupy_slot
+    unless slot.nil?
+      puts "Slot #{slot.slot_number} acquired for model #{model_name} on backend #{backend.name}".bright.green
       return {instance: instance, slot: slot}
     end
+    puts "Failed to acquire slot for model #{model_name} on backend #{backend.name}".bright.red
   end
   
   # No available slots found, create new instance
-  puts "Creating new instance for model #{model_name} on backend #{backend.name}"
+  puts "Creating new instance for model #{model_name} on backend #{backend.name}".bright.magenta
   new_inst = LlamaInstance.new(
     model: model,
     backend: backend,
@@ -105,24 +116,24 @@ def acquire_slot(model_name)
   )
 
   if new_inst.nil?
-    puts "Failed to create new instance for model #{model_name} on backend #{backend.name}"
+    puts "Failed to create new instance for model #{model_name} on backend #{backend.name}".bright.red
     return nil
   end
 
-  new_inst.save
-  new_inst.launch
+  new_inst.wait_loaded
 
-  if new_inst.cached_active
-    puts "Instance for model #{model_name} on backend #{backend.name} is active"
-  else
-    puts "Instance for model #{model_name} on backend #{backend.name} is not active"
+  unless new_inst.ready?
+    puts "Failed to launch new instance for model #{model_name} on backend #{backend.name}".bright.red
     return nil
   end
+
+  puts "Instance for model #{model_name} on backend #{backend.name} is active".bright.green
+
   if slot = new_inst.occupy_slot
-    puts "Slot acquired for model #{model_name} on backend #{backend.name}"
+    puts "Slot acquired for model #{model_name} on backend #{backend.name}".bright.green
     return {instance: new_inst, slot: slot}
   end
-  puts "Failed to acquire slot for model #{model_name} on backend #{backend.name}"
+  puts "Failed to acquire slot for model #{model_name} on backend #{backend.name}".bright.red
   nil
 end
 
@@ -130,6 +141,7 @@ end
 def release_slot(instance_data)
   return unless instance_data && instance_data[:instance] && instance_data[:slot]
   instance_data[:instance].release_slot(instance_data[:slot])
+  puts "Slot released for model #{instance_data[:instance].model.name} on backend #{instance_data[:instance].backend.name}".bright.green
 end
 
 # Route the request
@@ -141,7 +153,7 @@ def route_request(request_data, route)
   uri = URI.parse("#{instance_data[:instance].backend.url}#{route}")
   uri.port = instance_data[:instance].port
 
-  puts "Forwarding request to #{uri}"
+  puts "Forwarding request to #{uri}".bright.magenta
   result = forward_request(uri, request_data)
 
   release_slot(instance_data)
@@ -172,15 +184,13 @@ Thread.new do
     puts "Updating backends"
     Backend.all.each do |backend|
       previous_status = backend.available
-      backend.update_status
-      if !previous_status && backend.available && (Time.now.to_i - backend.updated_at.to_i) > $config["update_interval"]
-        backend.post_model_list(Model.all)
-      end
+      backend.sync_complete_state
       if previous_status && !backend.available
-        backend.llama_instances.each do |instance|
-          LlamaInstanceSlot.where(llama_instance: instance).destroy_all
-          instance.destroy
-        end
+        puts "Backend #{backend.name} goes offline".bright.red
+        backend.llama_instances.destroy_all
+      elsif !previous_status && backend.available
+        puts "Backend #{backend.name} becomes available".bright.green
+        backend.post_model_list(Model.all)
       end
     end
     puts "Updating done"

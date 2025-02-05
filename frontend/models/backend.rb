@@ -16,8 +16,8 @@ class Backend < ActiveRecord::Base
     response = Net::HTTP.get_response(uri)
     JSON.parse(response.body)
   rescue => e
-    puts e.message
-    puts e.backtrace
+    puts Rainbow(e.message).bright.red
+    #puts e.backtrace
     nil
   end
 
@@ -29,15 +29,34 @@ class Backend < ActiveRecord::Base
     response = Net::HTTP.start(uri.host, uri.port) { |http| http.request(request) }
     JSON.parse(response.body)
   rescue => e
-    puts e.message
-    puts e.backtrace
+    puts Rainbow(e.message).bright.red
+    #puts e.backtrace
     nil
   end
-  
-  def enumerate_gpus
-    response = get('gpus')
-    puts "Enumerating GPUs: #{response.inspect}"
+
+  def post_model_list(models)
+    response = post('models', models.map(&:config))
     return false unless response
+    true
+  rescue => e
+    puts e.message
+    puts e.backtrace
+    false
+  end
+
+  def sync_complete_state
+    sync_models
+    return unless self.available
+    sync_gpus
+    sync_instances
+  end
+
+  def sync_gpus
+    response = get('gpus')
+    if response.nil? || response.include?('error')
+      self.available = false
+      return save
+    end
 
     transaction do
       # Track which Gpus we've seen
@@ -64,115 +83,66 @@ class Backend < ActiveRecord::Base
         current_gpu_ids << gpu.id
       end
 
-      puts "Current GPU IDs: #{current_gpu_ids.inspect}"
       # Remove Gpus that no longer exist
       gpus.where.not(id: current_gpu_ids).destroy_all
       
       self.available = true
+      self.last_seen_at = Time.now
       save
-    end
-    
-    true
-  rescue => e
-    puts e.message
-    puts e.backtrace
-    false
+    end    
   end
 
-  def enumerate_models
+  def sync_models
     response = get('models')
-    if response
-      self.models_from_backend = response
-      self.available = true
-    else
+    if response.nil? || response.include?('error')
       self.available = false
+      return save
     end
+
+    self.models_from_backend = response
+    self.available = true
+    self.last_seen_at = Time.now
     save
-    self.available
   end
 
-  def update_status
-    self.available = enumerate_gpus && enumerate_models
-    save
-    self.available
-  end
-
-  def post_model_list(models)
-    response = post('models', models.map(&:config))
-    return false unless response
-    true
-  rescue => e
-    puts e.message
-    puts e.backtrace
-    false
-  end
-
-  def sync_complete_state
-    transaction do
-      # Sync Gpu and model state (existing methods)
-      enumerate_gpus
-      enumerate_models
-      
-      # Sync running instances
-      response = get('instances')
-      30.times do
-        puts "Syncing instances: #{response.inspect}"
-      end
-      puts "Syncing instances: #{response.inspect}"
-      if response
-        current_instance_ids = []
-        
-        response.each do |inst_data|
-          model = Model.find_by(name: inst_data['model'])          
-          instance = llama_instances.find_or_create_by!(
-            name: inst_data['name'],
-            model: model,
-            backend: self
-          )
-          
-          instance.update!(
-            port: inst_data['port'],
-            slots_capacity: inst_data['slots_capacity'],
-            slots_free: inst_data['slots_capacity'],
-            cached_active: true
-          )
-          
-          current_instance_ids << instance.id
-          
-          # Handle slots
-          current_slot_ids = []
-          inst_data['slots_capacity'].times do |i|
-            slot = instance.llama_instance_slots.find_or_create_by!(
-              llama_instance: instance,
-              model: model,
-              slot_number: i
-            )
-            
-            slot.update!(
-              model: model,
-              occupied: false,
-            )
-            
-            current_slot_ids << slot.id
-          end
-          
-          # Remove stale slots
-          instance.llama_instance_slots.where.not(id: current_slot_ids).destroy_all
-        end
-        
-        # Remove stale instances
-        llama_instances.where.not(id: current_instance_ids).destroy_all
-      end
-
-      self.available = true
-      save!
+  def sync_instances
+    response = get('instances')
+    if response.nil? || response.include?('error')
+      self.available = false
+      return save
     end
-    true
-  rescue => e
-    puts "Error syncing backend #{name}: #{e.message}"
-    puts e.backtrace
-    self.available = false
-    save!
-    false
+
+    current_instance_ids = []
+    response.each do |inst_data|
+      puts Rainbow("Processing instance #{inst_data['name']} on #{self.name}").bright.yellow
+      model = Model.find_by(name: inst_data['model'])
+      model_config = model.config
+      instance = LlamaInstance.find_or_create_by!(
+        backend: self,
+        model: model,
+        slots_capacity: model_config['slots'],
+        name: inst_data['name'],
+        running: inst_data['running'],
+        loaded: inst_data['loaded'],
+        port: inst_data['port'],
+        active: true,
+      )
+      instance.update_status
+      current_instance_ids << instance.id
+      inst_data['slots_capacity'].times do |i|
+        LlamaInstanceSlot.find_or_create_by!(
+          llama_instance: instance,
+          slot_number: i,
+          model: model,
+          occupied: false
+        )
+      end        
+    end
+    LlamaInstance.where.not(id: current_instance_ids).destroy_all
+    LlamaInstanceSlot.where.not(llama_instance_id: current_instance_ids).destroy_all
+    
+    self.available = true
+    self.last_seen_at = Time.now
+  save
   end
 end
