@@ -1,0 +1,9 @@
+name: i18n
+version: 0.4.1
+
+authors:
+  - Seth Tucker <crimsonknightstudios@gmail.com>
+
+crystal: ">= 0.35.0"
+
+license: MIT

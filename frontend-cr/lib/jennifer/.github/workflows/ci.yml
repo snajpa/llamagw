@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  pull_request:
+    branches: "*"
+  push:
+    branches: master
+  schedule:
+    - cron: "0 7 * * 1"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crystal_version: 1.0.0
+            DB: mysql
+            os: ubuntu-20.04
+          - crystal_version: 1.0.0
+            DB: postgres
+            os: ubuntu-20.04
+          - crystal_version: 1.1.0
+            DB: mysql
+            os: ubuntu-20.04
+          - crystal_version: 1.1.0
+            DB: postgres
+            os: ubuntu-20.04
+          - crystal_version: 1.2.2
+            DB: mysql
+          - crystal_version: 1.2.2
+            DB: postgres
+          - crystal_version: 1.3.2
+            DB: mysql
+          - crystal_version: 1.3.2
+            DB: postgres
+          - crystal_version: 1.4.1
+            DB: mysql
+          - crystal_version: 1.4.1
+            DB: postgres
+          - crystal_version: 1.5.1
+            DB: mysql
+          - crystal_version: 1.5.1
+            DB: postgres
+          - crystal_version: 1.6.2
+            DB: mysql
+          - crystal_version: 1.6.2
+            DB: postgres
+          - crystal_version: 1.7.3
+            DB: mysql
+          - crystal_version: 1.7.3
+            DB: postgres
+          - crystal_version: 1.8.2
+            DB: mysql
+            integration: true
+            linter: true
+          - crystal_version: 1.8.2
+            DB: postgres
+            integration: true
+            linter: true
+          - crystal_version: 1.8.2
+            DB: postgres
+            other: MT=1
+          - crystal_version: 1.8.2
+            DB: postgres
+            pair: true
+            other: PAIR_DB_USER=root PAIR_DB_PASSWORD=
+          - crystal_version: 1.8.2
+            DB: mysql
+            pair: true
+            other: PAIR_DB_USER=dbuser PAIR_DB_PASSWORD=dbpassword
+
+    runs-on: ${{ matrix.os || 'ubuntu-22.04' }}
+
+    env:
+      DB: ${{ matrix.DB }}
+      PAIR: ${{ matrix.pair }}
+      DB_USER: root
+      DB_PASSWORD: ${{ matrix.DB != 'mysql' && 'dbpassword' || null }}
+
+    steps:
+      - name: Export rest variables
+        run: export ${{ matrix.other }}
+
+      - name: Install Crystal
+        uses: oprypin/install-crystal@v1
+        with:
+          crystal: ${{matrix.crystal_version}}
+
+      - name: Donwload sources
+        uses: actions/checkout@v2
+
+      - name: Check formatting
+        if: ${{ matrix.linter }}
+        run: make format
+
+      - name: Install dependencies
+        run: |
+          function version { echo "$@" | awk -F. '{ printf("%d%03d%03d%03d\n", $1,$2,$3,$4); }'; }
+          if [ $(version '${{ matrix.crystal_version }}') -lt $(version '1.8.2') ]; then
+            cp .github/shard_1_3_2.yml shard.yml
+          fi
+          shards install
+
+      - name: Run linter
+        if: ${{ matrix.linter }}
+        run: make lint
+
+      - name: 'Install MySQL'
+        if: ${{ matrix.DB == 'mysql' || matrix.pair }}
+        run: bash .github/setup_mysql.sh
+
+      - name: Install PostgreSQL
+        if: ${{ matrix.DB == 'postgres' || matrix.pair }}
+        uses: Daniel-Marynicz/postgresql-action@master
+        with:
+          postgres_image_tag: '12'
+          postgres_user: ${{ env.DB_USER }}
+          postgres_password: ${{ env.DB_PASSWORD }}
+
+      - name: Create configuration file
+        run: bash ./scripts/setup.sh .github/database.yml
+
+      - name: Run migrations
+        run: make sam db:setup
+
+      - name: Run specs
+        run: |
+          if [ $MT == '1' ]
+          then
+            crystal spec -Dpreview_mt
+          else
+            crystal spec --error-trace
+          fi
+
+      - name: Run integration specs
+        if: ${{ matrix.integration }}
+        run: bash .github/run_integration_tests.sh
