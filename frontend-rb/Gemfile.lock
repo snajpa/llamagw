@@ -34,6 +34,9 @@ GEM
     mustermann (3.0.3)
       ruby2_keywords (~> 0.0.1)
     mysql2 (0.5.6)
+    nio4r (2.7.4)
+    puma (6.6.0)
+      nio4r (~> 2.0)
     rack (3.1.9)
     rack-protection (4.1.1)
       base64 (>= 0.1.0)
@@ -68,7 +71,6 @@ GEM
       sinatra-contrib
     sqlite3 (2.5.0)
       mini_portile2 (~> 2.8.0)
-    sqlite3 (2.5.0-x86_64-linux-gnu)
     tilt (2.6.0)
     timeout (0.4.3)
     tzinfo (2.0.6)
@@ -81,6 +83,7 @@ PLATFORMS
 DEPENDENCIES
   activerecord (~> 7.2)
   mysql2 (~> 0.5.6)
+  puma (~> 6.6)
   rackup (~> 2.2)
   rainbow (~> 3.1)
   rake (~> 13.2)

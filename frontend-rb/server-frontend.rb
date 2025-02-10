@@ -111,6 +111,7 @@ return unless __FILE__ == $PROGRAM_NAME
 load_config_into_db(config_file)
 
 Thread.new do
+  using Rainbow
   loop do
     puts "Updating backends"
     Backend.all.each do |backend|
