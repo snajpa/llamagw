@@ -54,29 +54,59 @@ get '/' do
         <th>VRAM Total</th>
         <th>VRAM Free</th>
         <th>VRAM Used</th>
-        <th>Power Usage</th>
-        <th>Compute Usage</th>
-        <th>MemBW Usage</th>
-        <th>Temperature</th>
+        <th>GPU Util</th>
+        <th>MemBW Util</th>
+        <th>GPU clock</th>
+        <th>Mem clock</th>
+        <th>GPU Temp</th>
+        <th>Mem Temp</th>
+        <th>Fan Speed</th>
+        <th>Power Avg</th>
+        <th>Power Inst</th>
+        <th>Power Limit</th>
+        <th>Pstate</th>
         <th>Status</th>
       </tr>
   BLOCK
-
+  
+  totals = { :backend_name => '<b>Total</b>'}
+  gpus = []
   Gpu.all.each do |gpu|
     backend = gpu.reload_backend
+    h = gpu.to_h
+    h.each do |key, value|
+      if value.is_a?(Integer)
+        totals[key] = value + (totals[key] || 0)
+      end
+    end      
+    gpus << h
+  end
+  totals[:index] = gpus.size
+  totals[:utilization_gpu] = totals[:utilization_memory] = 0
+  totals[:clocks_current_graphics] = totals[:clocks_current_memory] = 0
+  totals[:temperature_gpu] = totals[:temperature_memory] = totals[:fan_speed] = 0
+  gpus << totals
+  gpus.each do |gpu|
     gpus_html += <<~GBLK
       <tr>
-        <td>#{backend.name}</td>
-        <td>#{gpu.index}</td>
-        <td>#{gpu.vendor}</td>
-        <td>#{gpu.memory_total} MB</td>
-        <td>#{gpu.memory_free} MB</td>
-        <td>#{gpu.memory_used} MB</td>
-        <td>#{gpu.power_usage}W</td>
-        <td>#{gpu.compute_usage}%</td>
-        <td>#{gpu.membw_usage}%</td>
-        <td>#{gpu.temperature}C</td>
-        <td>#{backend.available ? 'Available' : 'Unavailable'}</td>
+        <td>#{gpu[:backend_name]}</td>
+        <td>#{gpu[:index]}</td>
+        <td>#{gpu[:vendor]}</td>
+        <td>#{gpu[:memory_total]} MB</td>
+        <td>#{gpu[:memory_free]} MB</td>
+        <td>#{gpu[:memory_used]} MB</td>
+        <td>#{gpu[:utilization_gpu]}%</td>
+        <td>#{gpu[:utilization_memory]}%</td>
+        <td>#{gpu[:clocks_current_graphics]} MHz</td>
+        <td>#{gpu[:clocks_current_memory]} MHz</td>
+        <td>#{gpu[:temperature_gpu]}°C</td>
+        <td>#{gpu[:temperature_memory]}°C</td>
+        <td>#{gpu[:fan_speed]} %</td>
+        <td>#{gpu[:power_draw_average]} W</td>
+        <td>#{gpu[:power_draw_instant]} W</td>
+        <td>#{gpu[:power_limit]} W</td>
+        <td>#{gpu[:pstate]}</td>
+        <td>#{gpu[:backend_available] ? 'Available' : 'Unavailable'}</td>
       </tr>
     GBLK
   end

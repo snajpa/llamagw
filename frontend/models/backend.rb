@@ -1,6 +1,10 @@
 class Backend < ActiveRecord::Base
-  has_many :llama_instances
+  has_many :llama_instances, dependent: :destroy
   has_many :gpus
+
+  def available_gpu_memory
+    gpus.sum(:memory_free)
+  end
 
   def models_from_backend
     JSON.parse(self.models_json || '{}')
@@ -13,7 +17,7 @@ class Backend < ActiveRecord::Base
   def get(path, params = {})
     uri = URI.parse("#{self.url}/#{path}")
     uri.query = URI.encode_www_form(params)
-    response = Net::HTTP.get_response(uri)
+    response = Net::HTTP.get_response(uri, 'Accept' => 'application/json')
     JSON.parse(response.body)
   rescue => e
     puts Rainbow(e.message).bright.red
@@ -26,7 +30,9 @@ class Backend < ActiveRecord::Base
     request = Net::HTTP::Post.new(uri)
     request.body = json_payload.to_json
     request.content_type = 'application/json'
-    response = Net::HTTP.start(uri.host, uri.port) { |http| http.request(request) }
+    response = Net::HTTP.start(uri.host, uri.port) do |http|
+      http.request(request)
+    end
     JSON.parse(response.body)
   rescue => e
     puts Rainbow(e.message).bright.red
@@ -44,85 +50,65 @@ class Backend < ActiveRecord::Base
     false
   end
 
-  def sync_complete_state
-    sync_models
-    return unless self.available
-    sync_gpus
-    sync_instances
-  end
-
-  def sync_gpus
-    response = get('gpus')
-    if response.nil? || response.include?('error')
+  def sync_complete_state(first_sync = false)
+    status = get('')
+    if status.nil? || status['error']
       self.available = false
       return save
     end
+    sync_models(status['models'], first_sync)
+    sync_gpus(status['gpus'], first_sync)
+    sync_instances(status['instances'], first_sync)
+    self.available = true
+    self.last_seen_at = Time.now
+    save
+  end
 
-    # Track which Gpus we've seen
+  def sync_gpus(gpus_response, first_sync = false)
+    return unless gpus_response
     current_gpu_ids = []
     
-    response.each_with_index do |gpu_data, idx|
+    gpus_response.each_with_index do |gpu_data, idx|
       gpu = gpus.find_or_create_by!(
         backend: self,
         index: idx,
         vendor_index: gpu_data['vendor_index'],
         vendor: gpu_data['vendor'],
-        model: gpu_data['model'],
-        memory_total: gpu_data['memory_total'],
+        model: gpu_data['model']
       )
+      current_gpu_ids << gpu.id
       
       # Update the Gpu attributes
-      gpu.update!(
-        memory_free: gpu_data['memory_free'],
-        compute_usage: gpu_data['compute_usage'],
-        power_usage: gpu_data['power_usage'],
-        temperature: gpu_data['temperature']
-      )
-      
-      current_gpu_ids << gpu.id
+      gpu.update(gpu_data)      
     end
 
     # Remove Gpus that no longer exist
-    gpus.where.not(id: current_gpu_ids).destroy_all
-    
-    self.available = true
-    self.last_seen_at = Time.now
-    save
+    gpus.where.not(id: current_gpu_ids).destroy_all    
   end
 
-  def sync_models
-    response = get('models')
-    if response.nil? || response.include?('error')
-      self.available = false
-      return save
-    end
-
-    self.models_from_backend = response
-    self.available = true
-    self.last_seen_at = Time.now
-    save
+  def sync_models(models_response, first_sync = false)
+    return unless models_response
+    self.models_from_backend = models_response
   end
 
-  def sync_instances
-    response = get('instances')
-    if response.nil? || response.include?('error')
-      self.available = false
-      return save
-    end
-
+  def sync_instances(instances_response, first_sync = false)
+    return unless instances_response
     current_instance_ids = []
-    response.each do |inst_data|
-      puts Rainbow("Processing instance #{inst_data['name']} on #{self.name}").bright.yellow
+    instances_response.each do |inst_data|
+      puts Rainbow("Processing instance #{inst_data['name']} on #{self.name}").bright.yellow if $config['verbose']
       model = Model.find_by(name: inst_data['model'])
+      if model.nil?
+        puts Rainbow("Model #{inst_data['model']} om #{self.name} not found in db").bright.red
+        next
+      end
       instance = LlamaInstance.find_or_create_by!(
         backend: self,
         model: model,
         name: inst_data['name'],
         port: inst_data['port'],
-        running: inst_data['running'],
         active: true,
       )
-      instance.update_status(inst_data)
+      instance.update(inst_data)
       current_instance_ids << instance.id
       inst_data['slots_capacity'].times do |i|
         LlamaInstanceSlot.find_or_create_by!(
@@ -134,8 +120,6 @@ class Backend < ActiveRecord::Base
     end
     LlamaInstance.where.not(id: current_instance_ids).destroy_all
     LlamaInstanceSlot.where.not(llama_instance_id: current_instance_ids).destroy_all
-    self.available = true
-    self.last_seen_at = Time.now
     save
   end
 end

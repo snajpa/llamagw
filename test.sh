@@ -3,11 +3,11 @@ curl -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer example_api_key" \
   -d '{
-    "model": "gemma-2-9b-it-Q4_K_L-ctx-8192",
+    "model": "gemma-2-9b-instruct",
     "messages": [
       {
         "role": "user",
-        "content": "Hello, how are you?"
+        "content": "Elaborate on SERPINs."
       }
     ]
   }'

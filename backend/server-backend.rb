@@ -9,6 +9,10 @@ require 'thread'
 require 'optparse'
 require 'rainbow'
 
+require_relative 'lib/gpu'
+require_relative 'lib/llama_instance'
+require_relative 'lib/model'
+
 using Rainbow
 
 config_file = './config-backend.yml'
@@ -50,6 +54,7 @@ end
 
 CONFIG = file_config.merge(cli_options)
 
+VERBOSE   = CONFIG['verbose'] || false
 LOG_LINES = CONFIG['log_lines'] || 100
 MODEL_DIR = CONFIG['model_dir'] || "models"
 UPDATE_IN = CONFIG['update_in'] || 2
@@ -73,288 +78,10 @@ set :server, 'puma'
 set :puma_config do
   {
     workers: 32,
-    threads: [1, 32],
+    threads: [1, 1],
     environment: :production,
     queue_requests: false
   }
-end
-
-class Model
-  attr_reader :name, :slots, :ctx, :url, :files, :extra_args
-
-  def initialize(name, slots, ctx, url, files, extra_args = [])
-    @name = name
-    @slots = slots || 1
-    @ctx = ctx
-    @url = url
-    @files = files
-    @extra_args = extra_args || []
-    @downloading = false
-  end
-
-  def to_json(*args)
-    {
-      name: @name,
-      slots: @slots,
-      ctx: @ctx,
-      files: @files,
-      ready: ready?,
-      url: @url,
-      extra_args: @extra_args
-    }.to_json(*args)
-  end
-
-  def ready?
-    !@downloading #&&
-     # @files.all? { |file| File.exist?(File.join(MODEL_DIR, file)) &&
-     #                      File.size?(File.join(MODEL_DIR, file)) }
-  end
-  def download_missing_files
-    @files.each do |file|
-      filepath = File.join(MODEL_DIR, file)
-      temp_filepath = "#{filepath}.tmp"
-      unless File.exist?(filepath) && File.size?(filepath)
-        puts "Downloading #{file}..."
-        @downloading = true
-        thread = Thread.new do
-          url = format(@url, file)
-          system("wget -O #{temp_filepath} #{url}")
-          File.rename(temp_filepath, filepath) if File.size?(temp_filepath)
-          @downloading = false
-        end
-      end
-    end
-  end
-
-  def path
-    File.join(MODEL_DIR, @files.first)
-  end
-end
-
-class Gpu
-  attr_reader :vendor, :device, :status, :vendor_id
-
-  def initialize(vendor, device, vendor_id)
-    @vendor = vendor
-    @device = device
-    @vendor_id = vendor_id
-    @status = { vram_total: 0, vram_used: 0, power_usage: 0 }
-    start_monitoring
-  end
-
-  def to_json(*args)
-    {
-      vendor: @vendor,
-      vendor_index: @vendor_id,
-      model: @device,
-      memory_total: @status[:vram_total],
-      memory_free: @status[:vram_total] - @status[:vram_used],
-      compute_usage: 0,
-      membw_usage: 0, 
-      power_usage: @status[:power_usage],
-      temperature: 0
-    }.to_json(*args)
-  end
-
-  def start_monitoring
-    Thread.new do
-      loop do
-        update_status
-        sleep UPDATE_IN
-      end
-    end
-  end
-
-  def self.enumerate
-    id = 0
-    gpus = {}
-    blacklist = BLACKLIST
-    puts "Enumerating Gpus:"
-    `lspci -nn`.each_line do |line|
-      next unless line =~ /VGA|3D/i
-      vendor = if line =~ /NVIDIA/i
-                 "NVIDIA"
-               elsif line =~ /AMD/i
-                 "AMD"
-               elsif line =~ /Intel/i
-                 "Intel"
-               else
-                 "Unknown"
-               end
-      
-      # Skip if vendor is blacklisted
-      next if blacklist.include?(vendor.upcase)
-    
-      pci_id = line.split(" ")[0]
-      vendor_id = extract_vendor_id(line, vendor)
-      puts "Gpu #{id}: #{vendor} Vendor ID: #{vendor_id} #{line.strip}"
-      gpus[id] = Gpu.new(vendor, line.strip, vendor_id)
-      id += 1
-    end
-    gpus
-  end
-
-  def self.extract_vendor_id(match, vendor)
-    case vendor
-    when "NVIDIA"
-      `nvidia-smi --query-gpu=index,pci.bus_id --format=csv,noheader,nounits`.each_line do |line|
-        index, bus_id = line.split(",")
-        domain, bus, device, function = bus_id.split(":")
-        lspci_line = `lspci -nn -s #{domain}:#{bus}:#{device}.#{function}`
-        return index.strip if lspci_line == match
-      end
-      raise "NVIDIA Gpu not found"
-    when "AMD"
-      # TODO
-      return 0
-    when "Intel"
-      # TODO
-      return 0
-    end
-    "Unknown"
-  end
-
-  def update_status
-    case @vendor
-    when "NVIDIA"
-      output = `nvidia-smi -i #{@vendor_id} --query-gpu=memory.total,memory.used,power.draw --format=csv,noheader,nounits`
-      if $?.success?
-        @status[:vram_total], @status[:vram_used], @status[:power_usage] = output.split(",").map(&:strip).map(&:to_i)
-      else
-        @status[:vram_total] = @status[:vram_used] = @status[:power_usage] = 0
-      end
-    when "AMD"
-      output = `rocm-smi --showmeminfo vram --json`
-      if $?.success?
-        begin
-          data = JSON.parse(output)
-          @status[:vram_total] = data["VRAM_Total"]
-          @status[:vram_used] = data["VRAM_Used"]
-          @status[:power_usage] = data["Power_Usage"]
-        rescue JSON::ParserError
-          @status[:vram_total] = @status[:vram_used] = @status[:power_usage] = 0
-        end
-      else
-        @status[:vram_total] = @status[:vram_used] = @status[:power_usage] = 0
-      end
-    when "Intel"
-      output = `intel_gpu_top -d #{@vendor_id} -J 2>/dev/null`
-      if $?.success?
-        begin
-          data = JSON.parse(output)
-          @status[:vram_total] = data.dig("engines", 0, "memory", "total", "value") || 0
-          @status[:vram_used] = data.dig("engines", 0, "memory", "used", "value") || 0
-          @status[:power_usage] = data.dig("power", "gpu", "value") || 0
-        rescue JSON::ParserError
-          @status[:vram_total] = @status[:vram_used] = @status[:power_usage] = 0
-        end
-      else
-        @status[:vram_total] = @status[:vram_used] = @status[:power_usage] = 0
-      end
-    else
-      @status[:vram_total] = @status[:vram_used] = @status[:power_usage] = 0
-    end
-  end
-end
-
-class LlamaInstance
-  attr_reader :name, :command, :gpus, :bind, :port, :process, :stdout, :loaded, :running
-  attr_accessor :slots_in_use, :slots_capacity, :model
-
-  def initialize(name, model, bind, port, gpus)
-    @name = name
-    @model = model
-    @gpus = gpus || []
-    @bind = bind
-    @port = port
-    @stdout = []
-    @command = ""
-    @process = nil
-    @running = false
-    @loaded = false
-    @slots_capacity = model.slots
-    @slots_in_use = 0
-  end
-
-  def to_json(*args)
-    {
-      name: @name,
-      model: @model.name,
-      slots_in_use: @slots_in_use,
-      slots_capacity: @slots_capacity,
-      port: @port,
-      bind: @bind,
-      running: @process ? true : false,
-      loaded: @loaded,
-      command: @command,
-      gpus: @gpus.map(&:device)
-    }.to_json(*args)
-  end
-
-  def start
-    return "Instance already running" if @running
-    #puts Rainbow(caller.join("\n")).green
-    @command = "#{LLAMA_BIN} -m #{@model.path} "
-    @command += "-ngl 99 --host #{@bind} --port #{@port} "
-    @command += "-c #{@model.ctx * @model.slots} "
-    @command += "-np #{@model.slots} "
-    @command += @model.extra_args.join(' ')
-
-    env = if @gpus.any? { |gpu| gpu.vendor == "Intel" }
-            { "SYCL_DEVICE_FILTER" => "gpu:#{@gpus.map(&:device).join(',')}" }
-          else
-           # { "CUDA_VISIBLE_DEVICES" => @gpus.map(&:device).join(",") }
-           {}
-          end
-    env.merge!(ENV)
-    @thread = Thread.new do
-      Open3.popen3(env, @command) do |stdin, stdout, stderr, wait_thr|
-        @process = wait_thr
-        @running = true
-        ios = [stdout, stderr]
-
-        until ios.empty?
-          ready = IO.select(ios) # Wait for readable IO streams
-      
-          ready[0].each do |io|
-            begin
-              line = io.gets
-              if line.nil?  # Stream is closed
-                ios.delete(io)
-                next
-              end
-              if line =~ /main: server is listening on/
-                @loaded = true
-              end
-              # Maintain only the last 100 lines
-              @stdout << line.chomp
-              @stdout.shift if @stdout.size > 100
-      
-              # Print output in real-time
-              if io == stdout
-                puts line
-              else
-                warn line
-              end
-            rescue EOFError
-              ios.delete(io) # Remove closed stream
-            end
-          end
-        end
-      end
-    end
-    puts "Thread started"
-    to_json
-  end
-
-  def stop
-    return "No instance running" unless @process
-    Process.kill("TERM", @process.pid)
-    @process = nil
-    @running = false
-    @loaded = false
-    "Llama.cpp instance '#{@name}' stopped"
-  end
 end
 
 $models = {}
@@ -451,8 +178,7 @@ get '/gpus' do
 end
 
 get '/' do
-  puts "Request: #{request.accept}" 
-  if true 
+  if request.accept.include?("text/html") 
     gpus_html = "<table><tr><th>Vendor</th><th>Vendor ID</th><th>Device</th><th>VRAM Total</th><th>VRAM Used</th><th>Power Usage</th></tr>"
     $gpus.each do |id, gpu|
       gpus_html += "<tr><td>#{gpu.vendor}</td><td>#{gpu.vendor_id}</td><td>#{gpu.device}</td><td>#{gpu.status[:vram_total]}</td><td>#{gpu.status[:vram_used]}</td><td>#{gpu.status[:power_usage]}</td></tr>"
@@ -475,9 +201,9 @@ get '/' do
   else
     content_type :json
     {
-      gpus: $gpus.map { |id,  gpu| { vendor: gpu.vendor, device: gpu.device, status: gpu.status } },
-      models: $models.map { |name, model| { name: name, url: model.url, files: model.files } },
-      instances: $instances.map { |name, instance| { name: name, command: instance.command, gpus: instance.gpus.map(&:device), bind: instance.bind, port: instance.port, status: instance.process ? 'Running' : 'Stopped' } }
+      gpus: $gpus.map { |id,  gpu| gpu },
+      models: $models.map { |name, model| model }, 
+      instances: $instances.map { |name, instance| instance } 
     }.to_json
   end
 end

@@ -2,7 +2,8 @@ ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
   create_table "models", force: :cascade do |t|
     t.string     "name"
     t.integer    "slots"
-    t.integer    "timeout"
+    t.integer    "est_memory_mb"
+    
     t.text       "config_json"
     t.timestamps
   end
@@ -16,6 +17,11 @@ ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
     t.timestamps
   end
 
+  create_table "models_backends", id: false, force: :cascade do |t|
+    t.references :model, null: false, foreign_key: true, type: :bigint
+    t.references :backend, null: false, foreign_key: true, type: :bigint
+  end
+  
   create_table "llama_instances", force: :cascade do |t|
     t.references :backend, null: false, foreign_key: true, type: :bigint
     t.references :model, null: false, foreign_key: true, type: :bigint
@@ -39,17 +45,24 @@ ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
 
   create_table "gpus", force: :cascade do |t|
     t.references :backend, null: false, foreign_key: true, type: :bigint
-    t.references :llama_instance, null: true, foreign_key: true, type: :bigint
     t.integer    "index"
     t.integer    "vendor_index"
     t.string     "vendor"
     t.string     "model"
+    t.string     "pstate"
     t.integer    "memory_total"
     t.integer    "memory_free"
-    t.integer    "compute_usage"
-    t.integer    "membw_usage"
-    t.integer    "power_usage"
-    t.integer    "temperature"
+    t.integer    "memory_used"
+    t.integer    "utilization_gpu"
+    t.integer    "utilization_memory"
+    t.integer    "clocks_current_graphics"
+    t.integer    "clocks_current_memory"
+    t.integer    "temperature_gpu"
+    t.integer    "temperature_memory"
+    t.integer    "fan_speed"
+    t.integer    "power_draw_average"
+    t.integer    "power_draw_instant"
+    t.integer    "power_limit"
     t.timestamps
   end
 

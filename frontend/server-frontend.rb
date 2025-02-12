@@ -24,7 +24,7 @@ require_relative 'models/llama_instance_slot'
 
 config_file = './config-frontend.yml'
 OptionParser.new do |opts|
-  opts.banner = "Usage: server-frontend-ar.rb [options]"
+  opts.banner = "Usage: server-frontend.rb [options]"
   opts.on('-c', '--config=FILE', 'Path to config file') do |file|
     config_file = file
   end
@@ -37,14 +37,15 @@ end
 
 $config = YAML.load_file(config_file)
 $config["update_interval"] ||= 60
+$config["instance_timeout"] ||= 300
+$config["backend_timeout"] ||= 5
+$config["verbose"] ||= false
 
 def load_config_into_db(config_file)
   # Update models while preserving existing records
   if $config['models']
     $config['models'].each do |model_conf|
-      model = Model.find_or_initialize_by(name: model_conf['name'])
-      model.config = model_conf
-      model.save!
+      Model.import_from_config(model_conf)
     end
   end
 
@@ -96,10 +97,10 @@ set :server, 'puma' # Tell Sinatra to use Puma
 set :environment, :production
 set :puma_config do
   {
-    workers: 12,
-    threads: [1, 16],
+    workers: 8,
+    threads: [1, 1],
     environment: :production,
-    workers_timeout: 10,
+    workers_timeout: 1,
     queue_requests: false,
   }
 end
@@ -113,7 +114,7 @@ load_config_into_db(config_file)
 Thread.new do
   using Rainbow
   loop do
-    puts "Updating backends"
+    puts "Updating backends" if $config["verbose"]
     Backend.all.each do |backend|
       previous_status = backend.available
       backend.sync_complete_state
@@ -125,7 +126,7 @@ Thread.new do
         backend.post_model_list(Model.all)
       end
     end
-    puts "Updating done"
+    puts "Updating done" if $config["verbose"]
     sleep $config["update_interval"]
   end
 end
@@ -213,7 +214,7 @@ post '/*' do
     #    abort = true
     #  end
 
-    puts "Creating new instance for model #{model_name} on backend #{backend.name}".bright.magenta
+    puts "Creating new instance for model #{model_name} on backend #{backend.name}, free mem: #{(backend.available_gpu_memory/1024).round(2)} GB".bright.magenta
     new_inst = LlamaInstance.new(
       model: model,
       backend: backend,

@@ -2,7 +2,6 @@ class LlamaInstance < ActiveRecord::Base
   belongs_to :backend
   belongs_to :model
   has_many :llama_instance_slots, dependent: :destroy
-  has_many :gpus
 
   after_initialize :setup
 
@@ -23,7 +22,7 @@ class LlamaInstance < ActiveRecord::Base
     save
     #puts Rainbow(caller).bright.red
   
-    puts Rainbow("Launching instance #{self.name} on #{self.backend.name}").bright.magenta
+    puts Rainbow("Launching instance #{self.name} on #{self.backend.name}").bright.magenta  if $config['verbose']
     response = self.backend.post('instances', {
       name: self.name,
       model: self.model.name,
@@ -37,7 +36,7 @@ class LlamaInstance < ActiveRecord::Base
       return
     end
 
-    puts Rainbow("Model #{model.name} launched on #{self.backend.name}").bright.green
+    puts Rainbow("Model #{model.name} launched on #{self.backend.name}").bright.green if $config['verbose']
     self.port = response['port']
     self.active = true
     self.running = true
@@ -59,7 +58,7 @@ class LlamaInstance < ActiveRecord::Base
   end
 
   def update_status(response = nil)
-    puts Rainbow("Updating status for instance #{self.name} on #{self.backend.name}").bright.magenta
+    puts Rainbow("Updating status for instance #{self.name} on #{self.backend.name}").bright.magenta if $config['verbose']
     response = self.backend.get("instances/#{self.name}") unless response
     if response.nil?
       puts Rainbow("Instance #{self.name} on #{self.backend.name} is not available").bright.red
@@ -76,11 +75,11 @@ class LlamaInstance < ActiveRecord::Base
     self.loaded = !!response['loaded']
     self.running = !!response['running']
     self.active = true
-    puts Rainbow("Instance #{self.name} on #{self.backend.name} is loaded: #{self.loaded}, running: #{self.running}").bright
+    puts Rainbow("Instance #{self.name} on #{self.backend.name} is loaded: #{self.loaded}, running: #{self.running}").bright if $config['verbose']
     save    
   end
 
-  def wait_loaded(i = 300)
+  def wait_loaded(i = $config["instance_timeout"])
     i.times do
       self.reload
       if ready?
@@ -91,14 +90,13 @@ class LlamaInstance < ActiveRecord::Base
     self.loaded
   end
 
-  def ensure_loaded(i = 300)
-    #update_status
+  def ensure_loaded
     return true if ready?
     return false if !self.backend.available
 
     puts Rainbow("Instance #{self.name} on #{self.backend.name} is not ready, waiting").bright.red
     setup if !self.running
-    wait_loaded(i)
+    wait_loaded
   end
 
   def slots_free

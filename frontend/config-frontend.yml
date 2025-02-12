@@ -1,17 +1,22 @@
+model_aliases:
+- name: 4o
+  model: llama-3.1-nemotron-70b-instruct
 models:
-- name: gemma-2-9b-it-Q4_K_L-ctx-8192
+- name: gemma-2-9b-instruct
   files:
     - gemma-2-9b-it-Q4_K_L.gguf
   url: https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/main/%s?download=true
   ctx: 8192
   slots: 4
-- name: Llama-3.1-Nemotron-70B-Instruct-HF-IQ4_XS-ctx-131072-fa
+  est_memory_mb: 24000
+- name: llama-3.1-nemotron-70b-instruct
   files:
     - Llama-3.1-Nemotron-70B-Instruct-HF-IQ4_XS.gguf
   url: https://huggingface.co/bartowski/Llama-3.1-Nemotron-70B-Instruct-HF-GGUF/resolve/main/%s?download=true
   ctx: 131072
   extra_args: -fa -ctv q4_0 -ctk q4_0
   slots: 2
+  est_memory_mb: 48000
 backends:
 - name: snpdesktop
   url: http://localhost:4600
