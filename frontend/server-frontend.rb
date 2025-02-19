@@ -294,15 +294,26 @@ post '/*' do
   req.body = request_data.merge({
     'id_slot' => instance_data[:slot].slot_number,
   }).to_json
-  response = http.request(req)
-  result = response.body
 
-  if instance_data && instance_data[:instance] && instance_data[:slot]
-    instance_data[:slot].release
+  # Use Sinatra's stream helper to forward chunks as they are read
+  stream do |out|
+    begin
+      http.request(req) do |res|
+        # Forward status and headers (if needed)
+        status res.code.to_i
+        headers res.to_hash.transform_values(&:first)
+        res.read_body do |chunk|
+          out << chunk
+        end
+      end
+    rescue => e
+      out <<({ error: e.message }.to_json)
+    ensure
+      # Ensure the slot is released once streaming ends
+      instance_data[:slot].release if instance_data && instance_data[:slot]
+      puts "Slot #{instance_data[:slot].slot_number} released for model #{instance_data[:instance].model.name} on backend #{instance_data[:instance].backend.name}".bright.green
+    end
   end
-  puts "Slot #{instance_data[:slot].slot_number} released for model #{instance_data[:instance].model.name} on backend #{instance_data[:instance].backend.name}".bright.green
-
-  result
 rescue => e
   puts Rainbow(e.message).bright.red
   puts e.backtrace
