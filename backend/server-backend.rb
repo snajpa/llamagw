@@ -100,7 +100,7 @@ end
 post '/models' do
   models = JSON.parse(request.body.read, symbolize_names: true) rescue []
   models.each do |m|
-    $models[m[:name]] = Model.new(m[:name], m[:slots], m[:ctx], m[:url], m[:files], m[:extra_args])
+    $models[m[:name]] = Model.new(m[:name], m[:slots], m[:context_length], m[:url], m[:files], m[:extra_args])
   end
   $initialization_done = false
   puts "Model initialization started"

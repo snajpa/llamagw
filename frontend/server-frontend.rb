@@ -138,13 +138,42 @@ Thread.new do
   end
 end
 
-# Model listing
+before do
+  response.headers['Access-Control-Allow-Origin'] = '*'
+  response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD'
+  response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+end
+
+# Catch-all for preflight OPTIONS requests
+options '*' do
+  200
+end
+
+# Model listing (GET)
 get '/v1/models' do
   models = Model.all.map do |m|
     {
-      id: m.name,
+      id: m.id,
+      name: m.name,
+      created: m.created_at ? m.created_at.to_i : Time.now.to_i,
+      updated: m.updated_at ? m.updated_at.to_i : Time.now.to_i,
       object: 'model',
-      created: Time.now.to_i,
+      owned_by: 'organization',
+      permission: []
+    }
+  end
+  { data: models }.to_json
+end
+
+# CORS support: OPTIONS
+options '/v1/models' do
+  models = Model.all.order(:name).map do |m|
+    {
+      id: m.id,
+      name: m.name,
+      created: m.created_at ? m.created_at.to_i : Time.now.to_i,
+      updated: m.updated_at ? m.updated_at.to_i : Time.now.to_i,
+      object: 'model',
       owned_by: 'organization',
       permission: []
     }
@@ -156,8 +185,15 @@ end
 post '/*' do
   request_data = JSON.parse(request.body.read)
   route = request.path_info
-  model_name = request_data['model']
-  model = Model.find_by(name: model_name)
+  model_identifier = request_data['model']
+  # Try to locate the model by name first
+  model = Model.find_by(name: model_identifier)
+  # If not found and the provided identifier is numeric, use it as an index (0-based)
+  if model.nil? && model_identifier.to_s.strip.match?(/^\d+$/)
+    index = model_identifier.to_i - 1
+    model = Model.all.order(:name).to_a[index]
+  end
+
   halt 404, { error: 'Model not found' }.to_json unless model
 
   instance_data = nil
@@ -169,36 +205,36 @@ post '/*' do
   #    abort = true
   #  end
   
-  puts "Looking for available backend for model #{model_name}".bright.magenta
+  puts "Looking for available backend for model #{model.name}".bright.magenta
   backend = Backend.where(available: true).first
   if backend.nil?
-    puts "No available backends found for model #{model_name}".bright.red
+    puts "No available backends found for model #{model.name}".bright.red
     halt 503, { error: 'No available backends' }.to_json
   end
   #halt 503, { error: 'No available backends' }.to_json
 
-  puts "Acquiring instance for model #{model_name} on backend #{backend.name}".bright.magenta
+  puts "Acquiring instance for model #{model.name} on backend #{backend.name}".bright.magenta
   instance_data = nil
   LlamaInstance.joins(:backend).
                 where(model: model,
                       backend: { id: backend.id, available: true }).each do |instance|
-    puts "Instance for model #{model_name} on instance #{backend.name}.#{instance.name} is evaluated".bright.green
+    puts "Instance for model #{model.name} on instance #{backend.name}.#{instance.name} is evaluated".bright.green
     instance.ensure_loaded
     if !instance.ready?
       next
     end
 
     if instance.slots_free <= 0
-      puts "Instance for model #{model_name} on instance #{backend.name}.#{instance.name} has no free slots, next".bright.red
+      puts "Instance for model #{model.name} on instance #{backend.name}.#{instance.name} has no free slots, next".bright.red
       next
     end
 
     if slot = instance.occupy_slot
-      puts "Slot #{slot.slot_number} acquired for model #{model_name} on instance #{backend.name}.#{instance.name}".bright.green
+      puts "Slot #{slot.slot_number} acquired for model #{model.name} on instance #{backend.name}.#{instance.name}".bright.green
       instance_data = {instance: instance, slot: slot}
       break
     else
-      puts "Failed to acquire slot for model #{model_name} on instance #{backend.name}.#{instance.name}".bright.red
+      puts "Failed to acquire slot for model #{model.name} on instance #{backend.name}.#{instance.name}".bright.red
       next
     end
   end
@@ -214,7 +250,7 @@ post '/*' do
     #    abort = true
     #  end
 
-    puts "Creating new instance for model #{model_name} on backend #{backend.name}, free mem: #{(backend.available_gpu_memory/1024).round(2)} GB".bright.magenta
+    puts "Creating new instance for model #{model.name} on backend #{backend.name}, free mem: #{(backend.available_gpu_memory/1024).round(2)} GB".bright.magenta
     new_inst = LlamaInstance.new(
       model: model,
       backend: backend,
@@ -222,24 +258,24 @@ post '/*' do
     )
 
     if new_inst.nil?
-      puts "Failed to cre.;z< q=ate new instance for model #{model_name} on instance #{backend.name}.#{new_inst.name}".bright.red
+      puts "Failed to create new instance for model #{model.name} on instance #{backend.name}.#{new_inst.name}".bright.red
       halt 503, { error: 'Failed while creating new instance of model' }.to_json
     end
 
     new_inst.wait_loaded
 
     unless new_inst.ready?
-      puts "Failed to launch new instance for model #{model_name} on instance #{backend.name}.#{new_inst.name}".bright.red
+      puts "Failed to launch new instance for model #{model.name} on instance #{backend.name}.#{new_inst.name}".bright.red
       halt 503, { error: 'Failed while launching new instance of model' }.to_json
     end
 
-    puts "Instance for model #{model_name} on instance #{backend.name}.#{new_inst.name} is active".bright.green
+    puts "Instance for model #{model.name} on instance #{backend.name}.#{new_inst.name} is active".bright.green
 
     if slot = new_inst.occupy_slot
-      puts "Slot acquired for model #{model_name} on instance #{backend.name}.#{new_inst.name}".bright.green
+      puts "Slot acquired for model #{model.name} on instance #{backend.name}.#{new_inst.name}".bright.green
       instance_data = {instance: new_inst, slot: slot}
     else
-      puts "Failed to acquire slot for model #{model_name} on instance #{backend.name}.#{new_inst.name}".bright.red
+      puts "Failed to acquire slot for model #{model.name} on instance #{backend.name}.#{new_inst.name}".bright.red
       halt 503, { error: 'No usable instance or backend' }.to_json
     end
   end

@@ -1,11 +1,11 @@
 
 class Model
-  attr_reader :name, :slots, :ctx, :url, :files, :extra_args
+  attr_reader :name, :slots, :context_length, :url, :files, :extra_args
 
-  def initialize(name, slots, ctx, url, files, extra_args = [])
+  def initialize(name, slots, context_length, url, files, extra_args = [])
     @name = name
     @slots = slots || 1
-    @ctx = ctx
+    @context_length = context_length
     @url = url
     @files = files
     @extra_args = extra_args || []
@@ -16,7 +16,7 @@ class Model
     {
       name: @name,
       slots: @slots,
-      ctx: @ctx,
+      context_length: @context_length,
       files: @files,
       ready: ready?,
       url: @url,

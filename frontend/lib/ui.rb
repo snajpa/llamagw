@@ -131,7 +131,7 @@ get '/' do
       <tr>
         <td>#{model.name}</td>
         <td>#{conf['slots']}</td>
-        <td>#{conf['ctx']}</td>
+        <td>#{conf['context_length']}</td>
         <td>#{files.join(', ')}</td>
         <td>#{model_ready_on_all_backends?(model.name) ? 'Ready' : 'Unavailable'}</td>
       </tr>

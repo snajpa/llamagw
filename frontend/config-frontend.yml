@@ -6,17 +6,61 @@ models:
   files:
     - gemma-2-9b-it-Q4_K_L.gguf
   url: https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/main/%s?download=true
-  ctx: 8192
-  slots: 4
   est_memory_mb: 24000
+  slots: 4
+  context_length: 8192
+  temperature_range: [0.0, 2.0]
+  max_output_tokens: 8192
+  openai_specs:
+    api_response_time: 90s # Typical API response time, adjusted while running
+    model_type: ""
+    supported_modalities: [ text, image ] # [ text, image, audio, video ]
+    fine_tuning_methods: [] # [ LoRA, full ]
+    pricing_tier: free
+    availability: preview
+    chat: true
+    completion: true
+    embedding: true
+    image_generation: false
+    image_editing: false
+    speech_to_text: false
+    text_to_speech: false
+    code_generation: false
+    function_calling: false
+    fine_tuning: false
+    low_latency: true
+    streaming: true
+
 - name: llama-3.1-nemotron-70b-instruct
   files:
     - Llama-3.1-Nemotron-70B-Instruct-HF-IQ4_XS.gguf
   url: https://huggingface.co/bartowski/Llama-3.1-Nemotron-70B-Instruct-HF-GGUF/resolve/main/%s?download=true
-  ctx: 131072
   extra_args: -fa -ctv q4_0 -ctk q4_0
-  slots: 2
   est_memory_mb: 48000
+  slots: 2
+  context_length: 131072
+  temperature_range: [0.0, 2.0]
+  max_output_tokens: 131072
+  openai_specs:
+    api_response_time: 90s # Typical API response time, adjusted while running
+    model_type: ""
+    supported_modalities: [ text, image ] # [ text, image, audio, video ]
+    fine_tuning_methods: [] # [ LoRA, full ]
+    pricing_tier: free
+    availability: preview
+    chat: true
+    completion: true
+    embedding: true
+    image_generation: false
+    image_editing: false
+    speech_to_text: false
+    text_to_speech: false
+    code_generation: false
+    function_calling: false
+    fine_tuning: false
+    low_latency: true
+    streaming: true
+
 backends:
 - name: snpdesktop
   url: http://localhost:4600

@@ -37,7 +37,7 @@ class LlamaInstance
     #puts Rainbow(caller.join("\n")).green
     @command = "#{LLAMA_BIN} -m #{@model.path} "
     @command += "-ngl 99 --host #{@bind} --port #{@port} "
-    @command += "-c #{@model.ctx * @model.slots} "
+    @command += "-c #{@model.context_length * @model.slots} "
     @command += "-np #{@model.slots} "
     @command += @model.extra_args.join(' ') if @model.extra_args.is_a?(Array)
     @command += @model.extra_args if @model.extra_args.is_a?(String)

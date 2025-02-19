@@ -2,6 +2,7 @@ class LlamaInstance < ActiveRecord::Base
   belongs_to :backend
   belongs_to :model
   has_many :llama_instance_slots, dependent: :destroy
+  has_and_belongs_to_many :gpus
 
   after_initialize :setup
 

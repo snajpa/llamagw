@@ -1,9 +1,11 @@
-ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
+ActiveRecord::Schema[7.2].define(version: 2025_02_19_225908) do
   create_table "models", force: :cascade do |t|
     t.string     "name"
-    t.integer    "slots"
     t.integer    "est_memory_mb"
-    
+    t.integer    "slots"
+    t.integer    "context_length"
+    t.integer    "max_output_tokens"
+
     t.text       "config_json"
     t.timestamps
   end
@@ -21,7 +23,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
     t.references :model, null: false, foreign_key: true, type: :bigint
     t.references :backend, null: false, foreign_key: true, type: :bigint
   end
-  
+
   create_table "llama_instances", force: :cascade do |t|
     t.references :backend, null: false, foreign_key: true, type: :bigint
     t.references :model, null: false, foreign_key: true, type: :bigint
@@ -45,6 +47,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
 
   create_table "gpus", force: :cascade do |t|
     t.references :backend, null: false, foreign_key: true, type: :bigint
+
     t.integer    "index"
     t.integer    "vendor_index"
     t.string     "vendor"
@@ -65,6 +68,8 @@ ActiveRecord::Schema[7.2].define(version: 2025_02_02_225908) do
     t.integer    "power_limit"
     t.timestamps
   end
+
+  create_join_table "gpus", "llama_instances"
 
   add_index "llama_instances", ["backend_id", "name"], name: "index_llama_instances_on_backend_id_and_name", unique: true
 end

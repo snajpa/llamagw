@@ -1,5 +1,6 @@
 class Gpu < ActiveRecord::Base
   belongs_to :backend
+  has_and_belongs_to_many :instances
 
   def available?
     llama_instance_slot.nil?

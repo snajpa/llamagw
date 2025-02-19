@@ -104,11 +104,14 @@ class Backend < ActiveRecord::Base
       instance = LlamaInstance.find_or_create_by!(
         backend: self,
         model: model,
-        name: inst_data['name'],
         port: inst_data['port'],
         active: true,
       )
-      instance.update(inst_data)
+      instance.update!(
+        running: inst_data['running'],
+        loaded: inst_data['loaded'],
+        name: inst_data['name'],
+      )
       current_instance_ids << instance.id
       inst_data['slots_capacity'].times do |i|
         LlamaInstanceSlot.find_or_create_by!(
