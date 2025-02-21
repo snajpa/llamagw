@@ -27,7 +27,7 @@ class LlamaInstance < ActiveRecord::Base
     response = self.backend.post('instances', {
       name: self.name,
       model: self.model.name,
-      gpus: self.gpus.map(&:index)
+      gpus: self.gpus.map(&:vendor_id),
     })
   
     if response.nil? || response.include?('error')
@@ -43,11 +43,12 @@ class LlamaInstance < ActiveRecord::Base
     self.running = true
     self.loaded = false
     save
+    instance = self
     self.slots_capacity.times do |i|
       slot = LlamaInstanceSlot.find_or_create_by!(
-        llama_instance: self,
+        llama_instance: instance,
         slot_number: i,
-        model: self.model,
+        model: instance.model,
       )
       slot.occupied = false
       slot.save

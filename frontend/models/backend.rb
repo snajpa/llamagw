@@ -77,7 +77,8 @@ class Backend < ActiveRecord::Base
         model: gpu_data['model']
       )
       current_gpu_ids << gpu.id
-      
+      gpu_data.delete('usage_by_pid')
+      gpu_data.delete('usage_by_instance')
       # Update the Gpu attributes
       gpu.update(gpu_data)      
     end
@@ -101,17 +102,27 @@ class Backend < ActiveRecord::Base
         puts Rainbow("Model #{inst_data['model']} om #{self.name} not found in db").bright.red
         next
       end
-      instance = LlamaInstance.find_or_create_by!(
+      instance = LlamaInstance.find_by(
         backend: self,
         model: model,
         port: inst_data['port'],
-        active: true,
       )
-      instance.update!(
-        running: inst_data['running'],
-        loaded: inst_data['loaded'],
-        name: inst_data['name'],
-      )
+      if instance.nil?
+        instance = LlamaInstance.find_or_create_by!(
+          backend: self,
+          model: model,
+          port: inst_data['port'],
+          active: true,
+          loaded: inst_data['loaded'],
+          running: inst_data['running']
+        )
+      else
+        instance.update!(
+          active: true,
+          running: inst_data['running'],
+          loaded: inst_data['loaded'],
+        )
+      end
       current_instance_ids << instance.id
       inst_data['slots_capacity'].times do |i|
         LlamaInstanceSlot.find_or_create_by!(

@@ -1,6 +1,6 @@
 class LlamaInstance
   attr_reader :name, :command, :gpus, :bind, :port, :process, :stdout, :loaded, :running
-  attr_accessor :slots_in_use, :slots_capacity, :model
+  attr_accessor :slots_in_use, :slots_capacity, :model, :process
 
   def initialize(name, model, bind, port, gpus)
     @name = name
@@ -28,7 +28,8 @@ class LlamaInstance
       running: @running,
       loaded: @loaded,
       command: @command,
-      gpus: @gpus.map(&:device)
+      pid: @process&.pid,
+      gpus: @gpus.map(&:vendor_id)
     }.to_json(*args)
   end
 
@@ -39,15 +40,30 @@ class LlamaInstance
     @command += "-ngl 99 --host #{@bind} --port #{@port} "
     @command += "-c #{@model.context_length * @model.slots} "
     @command += "-np #{@model.slots} "
+    @command += "--no-mmap "
     @command += @model.extra_args.join(' ') if @model.extra_args.is_a?(Array)
     @command += @model.extra_args if @model.extra_args.is_a?(String)
 
-    env = if @gpus.any? { |gpu| gpu.vendor == "Intel" }
-            { "SYCL_DEVICE_FILTER" => "gpu:#{@gpus.map(&:device).join(',')}" }
-          else
-           # { "CUDA_VISIBLE_DEVICES" => @gpus.map(&:device).join(",") }
-           {}
-          end
+    env = {}
+    gpu_ids = @gpus.map(&:vendor_id)
+    gpu_ids.each_with_index do |gpu_id, i|
+      case @gpus[i].vendor
+      when "NVIDIA"
+        env_cuda_visible_devices = (ENV["CUDA_VISIBLE_DEVICES"] || "").split(",")
+        env_cuda_visible_devices << gpu_id.to_s
+        env["CUDA_VISIBLE_DEVICES"] = env_cuda_visible_devices.sort.uniq.join(",")
+      when "AMD"
+        env_rocm_visible_devices = (ENV["ROCM_VISIBLE_DEVICES"] || "").split(",")
+        env_rocm_visible_devices << gpu_id.to_s
+        env["ROCM_VISIBLE_DEVICES"] = env_rocm_visible_devices.sort.uniq.join(",")
+      when "Intel"
+        syscl_device_filter = (ENV["SYCL_DEVICE_FILTER"] || "").split(":")&.last&.split(",") || []
+        syscl_device_filter << gpu_id.to_s
+        env["SYCL_DEVICE_FILTER"] = "gpu:#{syscl_device_filter.join(',')}"
+      end
+    end
+    puts "Starting instance with command: #{@command}"
+    puts "Environment:\n#{env}"
     env.merge!(ENV)
     @thread = Thread.new do
       Open3.popen3(env, @command) do |stdin, stdout, stderr, wait_thr|

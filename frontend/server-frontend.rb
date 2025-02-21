@@ -205,7 +205,7 @@ post '/*' do
   #    abort = true
   #  end
   
-  puts "Looking for available backend for model #{model.name}".bright.magenta
+  puts "Looking for available backend for model #{model.name}".bright.magenta if $config['verbose']
   backend = Backend.where(available: true).first
   if backend.nil?
     puts "No available backends found for model #{model.name}".bright.red
@@ -213,12 +213,12 @@ post '/*' do
   end
   #halt 503, { error: 'No available backends' }.to_json
 
-  puts "Acquiring instance for model #{model.name} on backend #{backend.name}".bright.magenta
+  puts "Acquiring instance for model #{model.name} on backend #{backend.name}".bright.magenta if $config['verbose']
   instance_data = nil
   LlamaInstance.joins(:backend).
                 where(model: model,
                       backend: { id: backend.id, available: true }).each do |instance|
-    puts "Instance for model #{model.name} on instance #{backend.name}.#{instance.name} is evaluated".bright.green
+    puts "Instance for model #{model.name} on instance #{backend.name}.#{instance.name} is evaluated".bright.green if $config['verbose']
     instance.ensure_loaded
     if !instance.ready?
       next
@@ -324,3 +324,21 @@ rescue => e
 end
 
 require_relative 'lib/ui'
+
+get '/favicon.ico' do
+  content_type 'image/svg+xml'
+  <<-SVG
+  <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <!-- Gate posts -->
+    <rect x="10" y="16" width="4" height="32" fill="black" />
+    <rect x="50" y="16" width="4" height="32" fill="black" />
+    <!-- Gate bar -->
+    <rect x="10" y="32" width="44" height="4" fill="black" />
+    <!-- Llama face: Eyes -->
+    <circle cx="22" cy="20" r="2" fill="black" />
+    <circle cx="42" cy="20" r="2" fill="black" />
+    <!-- Llama face: Mouth -->
+    <line x1="26" y1="40" x2="38" y2="40" stroke="black" stroke-width="2" />
+  </svg>
+  SVG
+end

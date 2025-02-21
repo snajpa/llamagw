@@ -18,7 +18,9 @@ class Gpu
                 :fan_speed => 0,
                 :power_draw_average => 0,
                 :power_draw_instant => 0,
-                :power_limit => 0
+                :power_limit => 0,
+                :usage_by_pid => {},
+                :usage_by_instance => {},
               } 
     start_monitoring
   end
@@ -83,6 +85,56 @@ class Gpu
                   @status[:power_draw_average] = data[11].to_i
                   @status[:power_draw_instant] = data[12].to_i
                   @status[:power_limit] = data[13].to_i
+                end
+              end
+            end
+          end
+          threads.each(&:join)
+        end
+        sleep UPDATE_IN
+      end
+    end
+
+    nvidia_smi_cmd_mem = "nvidia-smi "
+    nvidia_smi_cmd_mem += "--query-compute-apps=pid,used_memory "
+    nvidia_smi_cmd_mem += "--format=csv,noheader,nounits --loop=#{UPDATE_IN} "
+    nvidia_smi_cmd_mem += "-i #{@vendor_id}"
+
+    Thread.new do
+      loop do
+        Open3.popen3(nvidia_smi_cmd_mem) do |stdin, stdout, stderr, wait_thr|
+          ios = [stdout, stderr]
+          threads = []
+          ios.each do |io|
+            threads << Thread.new do
+              until io.eof?
+                line = io.gets
+                puts "#{@vendor_id} #{line}" if VERBOSE
+                if io == stdout
+                  data = line.split(", ")
+                  pid = data[0].to_i
+                  used_memory = data[1].to_i
+                  puts "Pid: #{pid} Memory: #{used_memory}" if VERBOSE
+                  @status[:usage_by_pid] ||= {}
+                  @status[:usage_by_pid][pid] = { memory: used_memory, time: Time.now }
+                  @status[:usage_by_instance] ||= {}
+                  $instances.each do |name, instance|
+                    instance_pid = instance.process&.pid
+                    next if instance_pid.nil?
+                    next unless instance_pid == pid
+                    @status[:usage_by_instance][name] = { memory: used_memory, time: Time.now }
+                  end
+                end
+              end
+            end
+          end
+          threads << Thread.new do
+            until stderr.eof? && stdout.eof?
+              sleep UPDATE_IN
+              next unless @status[:usage_by_pid].is_a?(Hash)
+              @status[:usage_by_pid].each do |pid, data|
+                if Time.now - data[:time] > 2 * UPDATE_IN
+                  @status[:usage_by_pid].delete(pid)
                 end
               end
             end

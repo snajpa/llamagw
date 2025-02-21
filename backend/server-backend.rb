@@ -123,7 +123,7 @@ post '/instances' do
   halt 404, { error: "Model not found. #{request_data.inspect}" }.to_json if model.nil?
 
   instance_name = request_data[:name]
-  gpus = request_data[:gpus] || []
+  gpus = request_data[:gpus] || $gpus.keys
   bind = BIND_HOST
   
   port = LLAMA_PORT_RANGE.find { |p| !$USED_PORTS.include?(p) }
