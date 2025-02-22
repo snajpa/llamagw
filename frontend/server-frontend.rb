@@ -149,9 +149,8 @@ options '*' do
   200
 end
 
-# Model listing (GET)
-get '/v1/models' do
-  models = Model.all.map do |m|
+def list_models
+  Model.all.map do |m|
     {
       id: m.id,
       name: m.name,
@@ -162,30 +161,9 @@ get '/v1/models' do
       permission: []
     }
   end
-  { data: models }.to_json
 end
 
-# CORS support: OPTIONS
-options '/v1/models' do
-  models = Model.all.order(:name).map do |m|
-    {
-      id: m.id,
-      name: m.name,
-      created: m.created_at ? m.created_at.to_i : Time.now.to_i,
-      updated: m.updated_at ? m.updated_at.to_i : Time.now.to_i,
-      object: 'model',
-      owned_by: 'organization',
-      permission: []
-    }
-  end
-  { data: models }.to_json
-end
-
-# Pass any POST route along
-post '/*' do
-  request_data = JSON.parse(request.body.read)
-  route = request.path_info
-  model_identifier = request_data['model']
+def find_model(model_identifier)
   # Try to locate the model by name first
   model = Model.find_by(name: model_identifier)
   # If not found and the provided identifier is numeric, use it as an index (0-based)
@@ -193,27 +171,13 @@ post '/*' do
     index = model_identifier.to_i - 1
     model = Model.all.order(:name).to_a[index]
   end
+  model
+end
 
-  halt 404, { error: 'Model not found' }.to_json unless model
-
-  instance_data = nil
-  backend = nil
-  abort = false
-
-  #ActiveRecord::Base.transaction do
-  #  ActiveRecord::Base.after_rollback do
-  #    abort = true
-  #  end
-  
-  puts "Looking for available backend for model #{model.name}".bright.magenta if $config['verbose']
+def acquire_instance_slot(model)
   backend = Backend.where(available: true).first
-  if backend.nil?
-    puts "No available backends found for model #{model.name}".bright.red
-    halt 503, { error: 'No available backends' }.to_json
-  end
-  #halt 503, { error: 'No available backends' }.to_json
+  return [nil, 'No available backends'] unless backend
 
-  puts "Acquiring instance for model #{model.name} on backend #{backend.name}".bright.magenta if $config['verbose']
   instance_data = nil
   LlamaInstance.joins(:backend).
                 where(model: model,
@@ -239,17 +203,7 @@ post '/*' do
     end
   end
 
-  if abort
-    puts "Transaction aborted".bright.red
-    halt 503, { error: 'Transaction aborted' }.to_json
-  end
-
   if instance_data.nil?
-    #ActiveRecord::Base.transaction do
-    #  ActiveRecord::Base.after_rollback do
-    #    abort = true
-    #  end
-
     puts "Creating new instance for model #{model.name} on backend #{backend.name}, free mem: #{(backend.available_gpu_memory/1024).round(2)} GB".bright.magenta
     new_inst = LlamaInstance.new(
       model: model,
@@ -257,17 +211,11 @@ post '/*' do
       gpus: []
     )
 
-    if new_inst.nil?
-      puts "Failed to create new instance for model #{model.name} on instance #{backend.name}.#{new_inst.name}".bright.red
-      halt 503, { error: 'Failed while creating new instance of model' }.to_json
-    end
+    return [nil, 'Failed while creating new instance of model'] if new_inst.nil?
 
     new_inst.wait_loaded
 
-    unless new_inst.ready?
-      puts "Failed to launch new instance for model #{model.name} on instance #{backend.name}.#{new_inst.name}".bright.red
-      halt 503, { error: 'Failed while launching new instance of model' }.to_json
-    end
+    return [nil, 'Failed while launching new instance of model'] unless new_inst.ready?
 
     puts "Instance for model #{model.name} on instance #{backend.name}.#{new_inst.name} is active".bright.green
 
@@ -275,16 +223,39 @@ post '/*' do
       puts "Slot acquired for model #{model.name} on instance #{backend.name}.#{new_inst.name}".bright.green
       instance_data = {instance: new_inst, slot: slot}
     else
-      puts "Failed to acquire slot for model #{model.name} on instance #{backend.name}.#{new_inst.name}".bright.red
-      halt 503, { error: 'No usable instance or backend' }.to_json
+      return [nil, 'No usable instance or backend']
     end
   end
-  
-  if abort
-    puts "Transaction aborted".bright.red
-    halt 503, { error: 'Transaction aborted' }.to_json
+  [instance_data, nil]
+end
+
+def process_request(route)
+  request_data = JSON.parse(request.body.read)
+  model_identifier = request_data['model']
+
+  model = find_model(model_identifier)
+  halt 404, { error: 'Model not found' }.to_json unless model
+
+  puts "Looking for available backend for model #{model.name}".bright.magenta if $config['verbose']
+  instance_data, error = acquire_instance_slot(model)
+
+  if error
+    puts error.bright.red
+    halt 503, { error: error }.to_json
   end
-  
+
+  http, req, uri = forward_request(instance_data, route, request_data)
+  stream_response(http, req, instance_data)
+rescue => e
+  puts Rainbow(e.message).bright.red
+  puts e.backtrace
+  if instance_data && instance_data[:instance] && instance_data[:slot]
+    instance_data[:slot].release
+  end
+  halt 500, { error: e.message }.to_json
+end
+
+def forward_request(instance_data, route, request_data)
   uri = URI.parse("#{instance_data[:instance].backend.url}#{route}")
   uri.port = instance_data[:instance].port
 
@@ -294,8 +265,10 @@ post '/*' do
   req.body = request_data.merge({
     'id_slot' => instance_data[:slot].slot_number,
   }).to_json
+  [http, req, uri]
+end
 
-  # Use Sinatra's stream helper to forward chunks as they are read
+def stream_response(http, req, instance_data)
   stream do |out|
     begin
       http.request(req) do |res|
@@ -314,13 +287,119 @@ post '/*' do
       puts "Slot #{instance_data[:slot].slot_number} released for model #{instance_data[:instance].model.name} on backend #{instance_data[:instance].backend.name}".bright.green
     end
   end
-rescue => e
-  puts Rainbow(e.message).bright.red
-  puts e.backtrace
-  if instance_data && instance_data[:instance] && instance_data[:slot]
-    instance_data[:slot].release
-  end
-  halt 500, { error: e.message }.to_json
+end
+
+# OpenAI-like routes (nested under /v1)
+get '/v1/models' do
+  { data: list_models }.to_json
+end
+
+options '/v1/models' do
+  { data: list_models }.to_json
+end
+
+post '/v1/*' do
+  process_request(request.path_info)
+end
+
+# Ollama-specific routes
+get '/api/tags' do
+  # TODO: Implement listing of available models in Ollama format
+  # This should return a JSON array of model tags.
+  # Example: [{"name":"llama2", "modified_at": "...", "size": 1234567890}]
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+post '/api/pull' do
+  # TODO: Implement pulling a model from a remote source.
+  # This might involve downloading the model and making it available.
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+post '/api/create' do
+  # TODO: Implement creating a model.  This likely involves
+  # taking a name and FROM instructions to build a new model
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+post '/api/chat' do
+    # This is the main chat completion endpoint, similar to OpenAI's /v1/chat/completions
+    # It should accept a request with messages and return a streaming response
+    # that yields deltas.
+    # The request body will look something like this:
+    # {
+    #   "model": "llama2",
+    #   "messages": [
+    #     {"role": "user", "content": "Why is the sky blue?"}
+    #   ],
+    #   "stream": true
+    # }
+    # The response should be a series of JSON objects, one per chunk, like this:
+    # {
+    #   "model": "llama2",
+    #   "created_at": "2023-08-04T17:52:35.410901Z",
+    #   "message": {"role": "assistant", "content": "The sky is blue because..."},
+    #   "done": false
+    # }
+    # The final chunk should have "done": true.
+    # You'll need to adapt the existing proxy logic to handle this format.
+    process_request(request.path_info)
+end
+
+post '/api/embeddings' do
+  # TODO: Implement embeddings generation.
+  # This endpoint should accept a request with input text and return embeddings.
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+post '/api/generate' do
+  # TODO: Implement generate completion.
+  # This endpoint should accept a request with prompt and return completion.
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+post '/api/show' do
+  # TODO: Implement show model info.
+  # This endpoint should accept a request with model name and return model information.
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+post '/api/copy' do
+  # TODO: Implement copy model.
+  # This endpoint should accept a request with source and destination model names and copy the model.
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+delete '/api/delete' do
+  # TODO: Implement delete model.
+  # This endpoint should accept a request with model name and delete the model.
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+post '/api/push' do
+  # TODO: Implement push model.
+  # This endpoint should accept a request with model name and push the model to a remote registry.
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+get '/api/list' do
+  # TODO: Implement list local models.
+  # This endpoint should return a list of local models.
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+get '/api/health' do
+  # TODO: Implement health check.
+  # This endpoint should return the health status of the server.
+  halt 501, { error: 'Not Implemented' }.to_json
+end
+
+# Pass any POST route along
+post '/api/*' do
+  route = request.path_info
+  # strip the /api prefix
+  route = route[4..-1]
+  process_request()
 end
 
 require_relative 'lib/ui'
