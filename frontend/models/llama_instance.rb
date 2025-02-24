@@ -27,7 +27,7 @@ class LlamaInstance < ActiveRecord::Base
     response = self.backend.post('instances', {
       name: self.name,
       model: self.model.name,
-      gpus: self.gpus.map(&:vendor_id),
+      gpus: self.gpus.map(&:vendor_index),
     })
   
     if response.nil? || response.include?('error')
@@ -83,7 +83,6 @@ class LlamaInstance < ActiveRecord::Base
 
   def wait_loaded(i = $config["instance_timeout"])
     i.times do
-      self.reload
       if ready?
         break
       end

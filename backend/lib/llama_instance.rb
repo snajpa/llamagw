@@ -29,7 +29,7 @@ class LlamaInstance
       loaded: @loaded,
       command: @command,
       pid: @process&.pid,
-      gpus: @gpus.map(&:vendor_id)
+      gpus: @gpus
     }.to_json(*args)
   end
 
@@ -46,24 +46,28 @@ class LlamaInstance
 
     env = {}
     gpu_ids = @gpus.map(&:vendor_id)
+    puts Rainbow("GPU IDs: #{gpu_ids}").green
+    env_cuda_visible_devices = []
+    env_rocm_visible_devices = []
+    syscl_device_filter = []
     gpu_ids.each_with_index do |gpu_id, i|
       case @gpus[i].vendor
       when "NVIDIA"
-        env_cuda_visible_devices = (ENV["CUDA_VISIBLE_DEVICES"] || "").split(",")
+        env_cuda_visible_devices = (env["CUDA_VISIBLE_DEVICES"] || "").split(",")
         env_cuda_visible_devices << gpu_id.to_s
         env["CUDA_VISIBLE_DEVICES"] = env_cuda_visible_devices.sort.uniq.join(",")
       when "AMD"
-        env_rocm_visible_devices = (ENV["ROCM_VISIBLE_DEVICES"] || "").split(",")
+        env_rocm_visible_devices = (env["ROCM_VISIBLE_DEVICES"] || "").split(",")
         env_rocm_visible_devices << gpu_id.to_s
         env["ROCM_VISIBLE_DEVICES"] = env_rocm_visible_devices.sort.uniq.join(",")
       when "Intel"
-        syscl_device_filter = (ENV["SYCL_DEVICE_FILTER"] || "").split(":")&.last&.split(",") || []
+        syscl_device_filter = (env["SYCL_DEVICE_FILTER"] || "").split(":")&.last&.split(",") || []
         syscl_device_filter << gpu_id.to_s
         env["SYCL_DEVICE_FILTER"] = "gpu:#{syscl_device_filter.join(',')}"
       end
     end
-    puts "Starting instance with command: #{@command}"
-    puts "Environment:\n#{env}"
+    #puts "Starting instance with command: #{@command}"
+    #puts "Environment:\n#{env}"
     env.merge!(ENV)
     @thread = Thread.new do
       Open3.popen3(env, @command) do |stdin, stdout, stderr, wait_thr|

@@ -9,9 +9,9 @@ models:
   extra_args: -fa -ctv q4_0 -ctk q4_0
   est_memory_mb: 48000
   slots: 1
-  context_length: 131072
+  context_length: 65000
   temperature_range: [0.0, 2.0]
-  max_output_tokens: 131072
+  max_output_tokens: 65000
   openai_specs:
     api_response_time: 90s # Typical API response time, adjusted while running
     model_type: ""

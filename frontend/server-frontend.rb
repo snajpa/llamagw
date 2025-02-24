@@ -174,6 +174,53 @@ def find_model(model_identifier)
   model
 end
 
+def pick_backend_for_new_instance(model)
+  Backend.where(available: true).each do |backend|
+    if backend.models_from_backend.any? { |m| m['name'] == model.name }
+      return backend
+    end
+  end
+  nil
+end
+
+def pick_gpus_for_new_instance(backend, model)
+  needed_memory = model.est_memory_mb
+  selected_gpus = []
+  backend.gpus.sort_by(&:memory_free).reverse.select do |gpu|
+    if needed_memory > 0
+      selected_gpus << gpu
+      needed_memory -= gpu.memory_free
+      puts "GPU #{gpu.vendor_index} on #{backend.name} selected".bright.green
+    end
+  end
+  if needed_memory > 0
+    return [[], 'Not enough memory on available GPUs']
+  end
+  [selected_gpus, nil]
+end
+
+def allocate_new_instance(model)
+  backend = pick_backend_for_new_instance(model)
+  return [nil, 'No available backends'] unless backend
+
+  gpus, msg = pick_gpus_for_new_instance(backend, model)
+  return [nil, msg] if gpus.empty?
+
+  new_inst = LlamaInstance.new(
+    model: model,
+    backend: backend,
+    gpus: gpus
+  )
+
+  return [nil, 'Failed while creating new instance of model'] if new_inst.nil?
+
+  new_inst.wait_loaded
+
+  return [nil, 'Failed while launching new instance of model'] unless new_inst.ready?
+
+  [new_inst, nil]
+end
+
 def acquire_instance_slot(model)
   backend = Backend.where(available: true).first
   return [nil, 'No available backends'] unless backend
@@ -204,14 +251,10 @@ def acquire_instance_slot(model)
   end
 
   if instance_data.nil?
-    puts "Creating new instance for model #{model.name} on backend #{backend.name}, free mem: #{(backend.available_gpu_memory/1024).round(2)} GB".bright.magenta
-    new_inst = LlamaInstance.new(
-      model: model,
-      backend: backend,
-      gpus: []
-    )
-
-    return [nil, 'Failed while creating new instance of model'] if new_inst.nil?
+    new_inst, msg = allocate_new_instance(model)
+    if new_inst.nil?
+      return [nil, msg]
+    end
 
     new_inst.wait_loaded
 
@@ -262,9 +305,11 @@ def forward_request(instance_data, route, request_data)
   puts "Forwarding request to #{uri}".bright.magenta
   http = Net::HTTP.new(uri.host, uri.port)
   req = Net::HTTP::Post.new(uri.request_uri, 'Content-Type' => 'application/json')
-  req.body = request_data.merge({
+  req_body = request_data.merge({
     'id_slot' => instance_data[:slot].slot_number,
-  }).to_json
+  })
+  req_body.delete('model')
+  req.body = req_body.to_json
   [http, req, uri]
 end
 
@@ -343,7 +388,8 @@ post '/api/chat' do
     # }
     # The final chunk should have "done": true.
     # You'll need to adapt the existing proxy logic to handle this format.
-    process_request(request.path_info)
+    route = '/v1/chat/completions'
+    process_request(route)
 end
 
 post '/api/embeddings' do
