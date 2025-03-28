@@ -7,11 +7,11 @@ models:
     - DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf
   url: https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-70B-Q4_K_M/resolve/main/%s?download=true
   extra_args: -fa -ctv q4_0 -ctk q4_0
-  est_memory_mb: 48000
+  est_memory_mb: 95000
   slots: 1
-  context_length: 65000
+  context_length: 131072
   temperature_range: [0.0, 2.0]
-  max_output_tokens: 65000
+  max_output_tokens: 131072
   openai_specs:
     api_response_time: 90s # Typical API response time, adjusted while running
     model_type: ""

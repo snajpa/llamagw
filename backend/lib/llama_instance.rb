@@ -41,6 +41,7 @@ class LlamaInstance
     @command += "-c #{@model.context_length * @model.slots} "
     @command += "-np #{@model.slots} "
     @command += "--no-mmap "
+    #@command += "-sm row "
     @command += @model.extra_args.join(' ') if @model.extra_args.is_a?(Array)
     @command += @model.extra_args if @model.extra_args.is_a?(String)
 
